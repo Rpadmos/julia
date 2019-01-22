@@ -22,9 +22,6 @@ extern "C" {
 extern int jl_gc_mark_queue_obj_explicit(jl_gc_mark_cache_t *gc_cache,
                                          jl_gc_mark_sp_t *sp, jl_value_t *obj);
 
-// thread sleep threshold
-extern uint64_t jl_thread_sleep_threshold;
-
 // multiq
 // ---
 
@@ -222,15 +219,15 @@ void jl_threadfun(void *arg)
 
 JL_DLLEXPORT void jl_wakeup_thread(int16_t tid)
 {
-    /* wake up thread tid */
-    if (jl_thread_sleep_threshold) {
+    jl_ptls_t ptls = jl_get_ptls_states();
+    /* ensure thread tid is awake if necessary */
+    if (ptls->tid != tid && !_threadedregion && tid != -1) {
         uv_mutex_lock(&sleep_lock);
         uv_cond_broadcast(&sleep_alarm); // TODO: make this uv_cond_signal / just wake up correct thread
         uv_mutex_unlock(&sleep_lock);
     }
-
-    /* stop the event loop too, if alerting thread 1 */
-    if (tid == 0 || tid == -1)
+    /* stop the event loop too, if on thread 1 and alerting thread 1 */
+    if (ptls->tid == 0 && (tid == 0 || tid == -1))
         uv_stop(jl_global_event_loop());
 }
 
@@ -260,26 +257,20 @@ static jl_task_t *get_next_task(jl_value_t *getsticky)
 JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    jl_task_t *task = NULL;
-    JL_GC_PUSH1(&task);
+    jl_task_t *task;
 
-    uint64_t spin_start = 0;
-    while (!task) {
-        if (jl_thread_sleep_threshold && spin_start == 0) {
-            spin_start = uv_hrtime();
-        }
-
+    while (1) {
         jl_gc_safepoint();
         task = get_next_task(getsticky);
         if (task)
-            break;
+            return task;
 
         if (ptls->tid == 0) {
             if (!_threadedregion) {
                 if (jl_run_once(jl_global_event_loop()) == 0) {
                     task = get_next_task(getsticky);
                     if (task)
-                        break;
+                        return task;
 #ifdef _OS_WINDOWS_
                     Sleep(INFINITE);
 #else
@@ -304,16 +295,6 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
             }
             else {
                 jl_cpu_pause();
-                if (jl_thread_sleep_threshold && (uv_hrtime() - spin_start > jl_thread_sleep_threshold)) {
-                    uv_mutex_lock(&sleep_lock);
-                    task = get_next_task(getsticky);
-                    if (task) {
-                        uv_mutex_unlock(&sleep_lock);
-                        break;
-                    }
-                    sleepnow = 1;
-                    spin_start = 0;
-                }
             }
             if (sleepnow) {
                 int8_t gc_state = jl_gc_safe_enter(ptls);
@@ -323,9 +304,6 @@ JL_DLLEXPORT jl_task_t *jl_task_get_next(jl_value_t *getsticky)
             }
         }
     }
-
-    JL_GC_POP();
-    return task;
 }
 
 
