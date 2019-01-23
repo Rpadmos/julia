@@ -446,7 +446,7 @@ function enq_work(t::Task)
         tid = Threads.threadid()
     end
     push!(Workqueues[tid], t)
-    tid == Threads.threadid() || ccall(:jl_wakeup_thread, Cvoid, (Int16,), (tid - 1) % Int16)
+    tid == 1 && ccall(:uv_stop, Cvoid, (Ptr{Cvoid},), eventloop())
     return t
 end
 
