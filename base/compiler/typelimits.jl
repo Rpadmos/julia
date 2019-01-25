@@ -4,7 +4,7 @@
 # limitation parameters #
 #########################
 
-const MAX_TYPEUNION_COMPLEXITY = 3
+const MAX_TYPEUNION_COMPLEXITY = 2
 const MAX_INLINE_CONST_SIZE = 256
 
 #########################
